@@ -240,6 +240,8 @@ public class JavaGeneratorTest
         final Object groupFlyweight = fuelFiguresCount(msgFlyweight, 0);
 
         assertNotNull(groupFlyweight);
+
+        assertNotNull(msgFlyweight.toString());
     }
 
     @Test

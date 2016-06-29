@@ -117,7 +117,8 @@ public class JavaGenerator implements CodeGenerator
                 .append(INDENT).append("String sbeSemanticType();\n\n")
                 .append(INDENT).append("int offset();\n\n")
                 .append(INDENT).append("MessageEncoder wrap(").append(mutableBuffer).append(" buffer, int offset);\n\n")
-                .append(INDENT).append("int encodedLength();\n")
+                .append(INDENT).append("int encodedLength();\n\n")
+                .append(INDENT).append("StringBuilder appendTo(StringBuilder builder);\n")
                 .append("}\n");
         }
 
@@ -134,7 +135,8 @@ public class JavaGenerator implements CodeGenerator
                 .append(INDENT).append("int offset();\n\n")
                 .append(INDENT).append("MessageDecoder wrap(").append(readOnlyBuffer)
                 .append(" buffer, int offset, int actingBlockLength, int actingVersion);\n\n")
-                .append(INDENT).append("int encodedLength();\n")
+                .append(INDENT).append("int encodedLength();\n\n")
+                .append(INDENT).append("StringBuilder appendTo(StringBuilder builder);\n")
                 .append("}\n");
         }
     }
@@ -231,6 +233,9 @@ public class JavaGenerator implements CodeGenerator
             out.append(sb);
 
             out.append(generateEncoderVarData(className, varData, indent));
+
+            out.append(generateEncoderDisplay(formatClassName(decoderName(msgToken.name())), indent));
+
             out.append("}\n");
         }
     }
@@ -258,6 +263,8 @@ public class JavaGenerator implements CodeGenerator
             out.append(sb);
 
             out.append(generateDecoderVarData(varData, BASE_INDENT));
+
+            out.append(generateDecoderDisplay(msgToken.name(), fields, groups, varData, BASE_INDENT));
 
             out.append("}\n");
         }
@@ -298,6 +305,8 @@ public class JavaGenerator implements CodeGenerator
             final List<Token> varData = new ArrayList<>();
             i = collectVarData(tokens, i, varData);
             sb.append(generateDecoderVarData(varData, indent + INDENT));
+
+            appendGroupInstanceDecoderDisplay(sb, fields, groups, varData, indent + INDENT);
 
             sb.append(indent).append("    }\n");
         }
@@ -957,7 +966,7 @@ public class JavaGenerator implements CodeGenerator
         {
             generateFixedFlyweightHeader(token, decoderName, out, readOnlyBuffer, fqReadOnlyBuffer);
             out.append(generateChoiceDecoders(messageBody));
-
+            out.append(generateChoiceDisplay(messageBody));
             out.append("}\n");
         }
 
@@ -1035,6 +1044,8 @@ public class JavaGenerator implements CodeGenerator
                 }
             }
 
+            out.append(generateCompositeDecoderDisplay(tokens, BASE_INDENT));
+
             out.append("}\n");
         }
 
@@ -1068,6 +1079,8 @@ public class JavaGenerator implements CodeGenerator
                         break;
                 }
             }
+
+            out.append(generateCompositeEncoderDisplay(decoderName, BASE_INDENT));
 
             out.append("}\n");
         }
@@ -2362,5 +2375,277 @@ public class JavaGenerator implements CodeGenerator
         }
 
         throw new IllegalArgumentException("primitive type not supported: " + type);
+    }
+
+    private CharSequence generateEncoderDisplay(String decoderName, String baseIndent)
+    {
+        final String indent = baseIndent + "    ";
+        final StringBuilder sb = new StringBuilder();
+        appendToString(sb, indent);
+        sb.append("\n");
+        addLine(sb, indent, "public StringBuilder appendTo(StringBuilder builder)");
+        addLine(sb, indent, "{");
+        addLine(sb, indent, "    " + decoderName + " writer = new " + decoderName + "();");
+        addLine(sb, indent, "    writer.wrap(buffer, offset, BLOCK_LENGTH, SCHEMA_VERSION);");
+        addLine(sb, indent, "    return writer.appendTo(builder);");
+        addLine(sb, indent, "}");
+        return sb.toString();
+    }
+
+    private CharSequence generateCompositeEncoderDisplay(String decoderName, String baseIndent)
+    {
+        final String indent = baseIndent + "    ";
+        final StringBuilder sb = new StringBuilder();
+        appendToString(sb, indent);
+        sb.append("\n");
+        addLine(sb, indent, "public StringBuilder appendTo(StringBuilder builder)");
+        addLine(sb, indent, "{");
+        addLine(sb, indent, "    " + decoderName + " writer = new " + decoderName + "();");
+        addLine(sb, indent, "    writer.wrap(buffer, offset);");
+        addLine(sb, indent, "    return writer.appendTo(builder);");
+        addLine(sb, indent, "}");
+        return sb.toString();
+    }
+
+    private CharSequence generateCompositeDecoderDisplay(List<Token> tokens, String baseIndent)
+    {
+        final String indent = baseIndent + "    ";
+        final StringBuilder sb = new StringBuilder();
+        appendToString(sb, indent);
+        sb.append("\n");
+        addLine(sb, indent, "public StringBuilder appendTo(StringBuilder builder)");
+        addLine(sb, indent, "{");
+        addLine(sb, indent, "    builder.append(\"[\");");
+        for (int i = 1, end = tokens.size() - 1; i < end; i++)
+        {
+            final Token encodingToken = tokens.get(i);
+            final String propertyName = formatPropertyName(encodingToken.name());
+            writeTokenDisplay(propertyName, encodingToken, sb, indent + "    ");
+            if (encodingToken.signal() == Signal.BEGIN_COMPOSITE)
+            {
+                i = findEndSignal(tokens, i, Signal.END_COMPOSITE, encodingToken.name());
+            }
+        }
+        addLine(sb, indent, "    builder.append(\"]\");");
+        addLine(sb, indent, "    return builder;");
+        addLine(sb, indent, "}");
+        return sb.toString();
+    }
+
+    private CharSequence generateChoiceDisplay(List<Token> tokens)
+    {
+        final String indent = "    ";
+        final StringBuilder sb = new StringBuilder();
+        appendToString(sb, indent);
+        sb.append("\n");
+        addLine(sb, indent, "public StringBuilder appendTo(StringBuilder builder)");
+        addLine(sb, indent, "{");
+        addLine(sb, indent, "    builder.append('{');");
+        addLine(sb, indent, "    boolean atLeastOne = false;");
+        tokens
+            .stream()
+            .filter((token) -> token.signal() == Signal.CHOICE)
+            .forEach(
+                (token) ->
+                {
+                    final String choiceName = formatPropertyName(token.name());
+                    addLine(sb, indent, "    if(" + choiceName + "())");
+                    addLine(sb, indent, "    {");
+                    addLine(sb, indent, "        if(atLeastOne)");
+                    addLine(sb, indent, "        {");
+                    addLine(sb, indent, "            builder.append(',');");
+                    addLine(sb, indent, "        }");
+                    addLine(sb, indent, "        builder.append(\"" + choiceName + "\");");
+                    addLine(sb, indent, "        atLeastOne = true;");
+                    addLine(sb, indent, "    }");
+                }
+            );
+        addLine(sb, indent, "    builder.append('}');");
+        addLine(sb, indent, "    return builder;");
+        addLine(sb, indent, "}");
+        return sb.toString();
+    }
+
+    private CharSequence generateDecoderDisplay(
+            final String name,
+            final List<Token> tokens,
+            final List<Token> groups,
+            final List<Token> varLens,
+            final String baseIndent) throws IOException
+    {
+        final StringBuilder sb = new StringBuilder();
+        appendDecoderDisplay(sb, name, tokens, groups, varLens, baseIndent);
+        return sb.toString();
+    }
+
+    private StringBuilder appendGroupInstanceDecoderDisplay(
+            final StringBuilder sb,
+            final List<Token> tokens,
+            final List<Token> groups,
+            final List<Token> varLens,
+            final String baseIndent)
+    {
+        return appendDecoderDisplay(sb, null, tokens, groups, varLens, baseIndent);
+    }
+
+    private StringBuilder appendDecoderDisplay(
+            final StringBuilder sb,
+            final String messageName,
+            final List<Token> tokens,
+            final List<Token> groups,
+            final List<Token> varLens,
+            final String baseIndent)
+    {
+        final String indent = baseIndent + "    ";
+        appendToString(sb, indent);
+        sb.append("\n");
+        addLine(sb, indent, "public StringBuilder appendTo(StringBuilder builder)");
+        addLine(sb, indent, "{");
+        if (messageName != null)
+        {
+            addLine(sb, indent, "    int realLimit = limit();");
+            addLine(sb, indent, "    limit(offset + actingBlockLength);");
+            addLine(sb, indent, "    builder.append(\"[" + messageName + "]: \");");
+        }
+        eachField(
+            tokens,
+            (fieldToken, typeToken) ->
+            {
+                final String fieldName = formatPropertyName(fieldToken.name());
+                writeTokenDisplay(fieldName, typeToken, sb, indent + "    ");
+            }
+        );
+        //groups
+        for (int i = 0, size = groups.size(); i < size; i++)
+        {
+            final Token groupToken = groups.get(i);
+            if (groupToken.signal() != Signal.BEGIN_GROUP)
+            {
+                throw new IllegalStateException("tokens must begin with BEGIN_GROUP: token=" + groupToken);
+            }
+            addLine(sb, indent, "    //" + groupToken);
+            final String groupName = formatPropertyName(groupToken.name());
+            final String groupDecoderName = decoderName(formatClassName(groupToken.name()));
+            addLine(sb, indent, "    builder.append(\"" + groupName + "={\");");
+            addLine(sb, indent, "    " + groupDecoderName + " " + groupName + " = " + groupName + "();");
+            addLine(sb, indent, "    while (" + groupName + ".hasNext())");
+            addLine(sb, indent, "    {");
+            addLine(sb, indent, "        builder.append('[');");
+            addLine(sb, indent, "        " + groupName + ".next().appendTo(builder);");
+            addLine(sb, indent, "        builder.append(']');");
+            addLine(sb, indent, "    }");
+            addLine(sb, indent, "    builder.append(\"}|\");");
+            i = skipGroupContent(groups, i);
+        }
+        //varLength
+        for (int i = 0, size = varLens.size(); i < size;)
+        {
+            final Token varLenToken = varLens.get(i);
+            if (varLenToken.signal() != Signal.BEGIN_VAR_DATA)
+            {
+                throw new IllegalStateException("tokens must begin with BEGIN_VAR_DATA: token=" + varLenToken);
+            }
+            addLine(sb, indent, "    //" + varLenToken);
+            final String varLenName = formatPropertyName(varLenToken.name());
+            addLine(sb, indent, "    builder.append(\"" + varLenName + "=\");");
+            addLine(sb, indent, "    builder.append(" + varLenName + "());");
+            addLine(sb, indent, "    builder.append('|');");
+            i += varLenToken.componentTokenCount();
+        }
+        if (messageName != null)
+        {
+            addLine(sb, indent, "    limit(realLimit);");
+        }
+        addLine(sb, indent, "    return builder;");
+        addLine(sb, indent, "}");
+        return sb;
+    }
+
+    private int skipGroupContent(
+            final List<Token> groups,
+            final int i)
+    {
+        int res = i;
+        int depth = 1;
+        while (depth > 0)
+        {
+            final Signal current = groups.get(++res).signal();
+            switch (current)
+            {
+                case BEGIN_GROUP:
+                    depth++;
+                    break;
+                case END_GROUP:
+                    depth--;
+                    break;
+            }
+        }
+        return res;
+    }
+
+    private void writeTokenDisplay(final String fieldName,
+                                   final Token typeToken,
+                                   final StringBuilder sb,
+                                   final String indent)
+    {
+        addLine(sb, indent, "//" + typeToken);
+        // not interested in anything not "binarily" present
+        if (typeToken.encodedLength() <= 0 || typeToken.isConstantEncoding())
+        {
+            return;
+        }
+        addLine(sb, indent, "builder.append(\"" + fieldName + "=\");");
+        switch (typeToken.signal())
+        {
+            case ENCODING:
+                if (typeToken.arrayLength() > 1)
+                {
+                    if (typeToken.encoding().primitiveType() == PrimitiveType.CHAR)
+                    {
+                        addLine(sb, indent, "for(int i=0; i<" + fieldName + "Length() && " +
+                                fieldName + "(i)>0; i++)");
+                        addLine(sb, indent, "{");
+                        addLine(sb, indent, "    builder.append((char)" + fieldName + "(i));");
+                        addLine(sb, indent, "}");
+                    }
+                    else
+                    {
+                        addLine(sb, indent, "builder.append('{');");
+                        addLine(sb, indent, "for(int i=0; i<" + fieldName + "Length(); i++)");
+                        addLine(sb, indent, "{");
+                        addLine(sb, indent, "    builder.append('(').append(i).append(\"):\");");
+                        addLine(sb, indent, "}");
+                        addLine(sb, indent, "builder.append('}');");
+                    }
+                }
+                else
+                {
+                    // have to duplicate because of checkstyle :/
+                    addLine(sb, indent, "builder.append(" + fieldName + "());");
+                }
+                break;
+            case BEGIN_ENUM:
+            case BEGIN_SET:
+                addLine(sb, indent, "builder.append(" + fieldName + "());");
+                break;
+            case BEGIN_COMPOSITE:
+                addLine(sb, indent, fieldName + "().appendTo(builder);");
+                break;
+        }
+        addLine(sb, indent, "builder.append('|');");
+    }
+
+    private void appendToString(final StringBuilder sb, final String indent)
+    {
+        sb.append("\n");
+        addLine(sb, indent, "public String toString()");
+        addLine(sb, indent, "{");
+        addLine(sb, indent, "    return appendTo(new StringBuilder(100)).toString();");
+        addLine(sb, indent, "}");
+    }
+
+    private void addLine(StringBuilder sb, String indent, String line)
+    {
+        sb.append(indent + line + "\n");
     }
 }
